@@ -1,0 +1,308 @@
+---
+title: "USDA Nutrition Data Analysis"
+author: "Ruchi Neema, Snehal Vartak, Xiaotian Han, Zitong Li"
+date: "November 27, 2017"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: spacelab
+    toc: yes
+---
+
+
+# Introduction
+
+Most of the people today are conscious about the nutritional value of the foods they eat.
+USDA provides a nutrition data set for 8,789 different food items. The nutritient values are given for 100g of food serving. They also provide a separate dataset which classifies each of these food items in 25 different categories.
+We have extracted these food categories from the USDA website and included them as a new column in our dataset.
+
+## Data Description
+
+1. Food_group - 25 different categories (eg. Baked Products, Dairy and Egg Products, etc)
+2. Calories (in Kcal) - Continuous variable
+3. Protein(g) - Continuous variable
+4. TotalFat_(g) - Continuous variable
+5. Carbohydrt_(g) - Continuous variable
+6. Sodium_(mg) - Continuous variable
+7. SaturatedFat(g) - Continuous variable
+8. Cholestrl_(mg) - Continuous variable
+9. Sugar(g) - Continuous variable
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning= FALSE)
+library(ggplot2)
+library(corrplot)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(broom)
+library(MASS)
+library(tree)
+library(RColorBrewer)
+library(rattle)
+library(rpart)
+library(gridExtra)
+```
+
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+USDA = read.csv("USDA.csv")
+# Lets look at the summary of our data
+USDA$Shrt_Desc = as.character(USDA$Shrt_Desc)
+head(USDA)
+```
+
+
+
+## Research Questions
+
+### Regression Problem
+If we look at the nutrition label on any of the food items we buy, we can see that under the total calories it gives each nutrient source that contributes to the calorie value for that food. Based on this understanding, we built a model to see if the nutrients in our data set can succesfully explain the total calories for all foods. From this model, we will know the number of nutrient tests required to get the approximate calories in any new food item.
+
+### Classification problem
+As we have added the food groups to the original USDA nutrient data, we can pose this as a classification problem to identify the food group given the nutrient content of that food item.
+
+
+# Exploring the dataset
+
+### Looking at the data set summary
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+summary(USDA)
+USDA$Shrt_Desc[which.max(USDA$Sodium_.mg.)]
+```
+
+Thus, 100g of Salt has 38758mg of Sodium.
+
+### Let's take a look at which foods have Sodium >3000mg (per 100g serving)
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+highSodium = USDA[which(USDA$Sodium_.mg. > 3000),]
+unique(highSodium$Food_group)
+table(droplevels(highSodium$Food_group))
+```
+**Soups, Sauces, and Gravies** is the group with the most items in High Sodium Category -- (22)
+
+### Let's Look at the normal probability plot for Calories 
+
+We take a look at how the distribution of Calories is spread across all food items. Since few food items contain higher calories than usual the density plot is skewed to the right.
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+# Density plots for variables
+
+USDA_rm = na.omit(USDA)
+q1 = ggplot(USDA_rm,aes(sample = Calories.in.Kcal.)) + stat_qq() +ggtitle("Normal QQ Plot for Calories")
+# ggplot(USDA_rm,aes(Protein.g.)) + geom_density()
+# ggplot(USDA_rm,aes(TotalFat_.g.)) + geom_density()
+# ggplot(USDA_rm,aes(Carbohydrt_.g.)) + geom_density()
+# ggplot(USDA_rm,aes(Cholestrl_.mg.)) + geom_density()
+# ggplot(USDA_rm,aes(Sugar.g.)) + geom_density()
+# ggplot(USDA_rm,aes(SaturatedFat.g.)) + geom_density()
+
+# Log Transformation of a Skewed Distribution
+q2 = ggplot(USDA_rm,aes(sample = sqrt(USDA_rm$Calories.in.Kcal.))) + stat_qq()+ggtitle("Normal QQ Plot for Transformed Calories")
+
+grid.arrange(q1,q2,nrow=2)
+
+```
+
+
+## Correlation Among different variables
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+
+numeric_data = USDA[-c(1,2,3)]
+numeric_data = na.omit(numeric_data)
+res = cor(numeric_data)
+corrplot(res, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+```
+
+We can see that Calories is highly correlated with mainly Total Fats, Saturated Fats, Carbohydrates. Also, we can see that there is high correlation between Total Fats and saturated fats. Therefore, we can take any one of variable from Saturated and Total fats to built our linear model.Rest all our variables are not that strongly correlated.
+
+### The Mean calories with food group
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+
+Food=read.csv("USDA.csv", header = TRUE)
+
+## Calculate the mean for each food group
+mean.calories.group=Food %>% group_by(Food_group) %>% summarise(mean_Calories= mean(Calories.in.Kcal.))
+## Make a new data frame 
+Food.new=data.frame(mean.calories.group)
+Food.new=Food.new[order(Food.new$mean_Calories),]
+Food.new$Food_group=factor(Food.new$Food_group,levels=Food.new$Food_group)
+## Plot the mean calories of each food group and put them in order (from smallest to largest): 
+ggplot(Food.new, aes(x=mean_Calories, y=Food_group))+geom_point()
+## Divide Food groups and create a new column in Food.new data set.
+mean_Calories.cat=rep(NA, nrow(Food.new))
+Food.new$mean_Calories.cat[Food.new$mean_Calories >500] = "High Calories"
+Food.new$mean_Calories.cat[Food.new$mean_Calories >100 & Food.new$mean_Calories <=500 ] = "Medium Calories"
+Food.new$mean_Calories.cat[Food.new$mean_Calories <=100] = "Low Calories"
+mean_Calories.cat=factor(mean_Calories.cat, levels = c("High Calories", "Medium Calories", "Low Calories"))
+#Food.new
+```
+
+From the plot we can see that most groups are located between 200 and 400 calories and these groups are mainly meals, meats, cereals and diary. Vegetables and fruits have much lower calories than other types of food and if people would like to lose weight and eat healthier, then vegetables and fruits are their best choices. On the other hand, keep away from fats and oils, snacks and baked products since the calories they contain are high. We define the level of high, medium and low calories are also highly depending on this graph.
+
+# Regression Problem
+## Linear Regression Model
+
+Based on the correlation among variables, we build a regression model as follows-
+* **Dependent Variable** - Calories
+* **Predictor Variables** - Proteins, Total Fats, Carbohydrates, Cholestrol and Sugar
+
+
+```{r echo = FALSE, message = FALSE, warning= FALSE}
+
+# Linear model 
+
+model_data = na.omit(USDA)
+energy.lm = lm(Calories.in.Kcal. ~ Protein.g.+TotalFat_.g.+Carbohydrt_.g.+Sugar.g.+ Cholestrl_.mg. , data = model_data )
+summary(energy.lm)
+
+energy.lm.df = augment(energy.lm)
+energy.lm.df$.fitted = energy.lm.df$.fitted - mean(energy.lm.df$.fitted)
+energy.lm.long = energy.lm.df %>% gather(component, value, c(.fitted, .resid))
+ggplot(energy.lm.long, aes(sample = value)) + stat_qq() + facet_grid(~component) + ggtitle("Residual-Fit Plot")
+ggplot(energy.lm.df, aes(x = .fitted, y = .resid)) + geom_point()+geom_smooth(method = "lm")
+```
+
+
+Linear model gives an R-squared of 98.85, which is very good. Looking at the residual fit plots we can see that there isn't much variation left in the residuals. 
+The residuals are randonly distributed around 0 except for a few outliers.
+
+All the predictor variables contribute to the total calories in a food item, some more than others (e.g. Total Fats). 
+
+## Robust linear model
+
+We fit the robust linear model to see if the effect of outliers can be controlled. 
+
+```{r ,echo = FALSE, message = FALSE, warning= FALSE}
+# Robust linear Model
+energy.rlm = rlm(Calories.in.Kcal. ~ Protein.g.+TotalFat_.g.+Carbohydrt_.g.+Sugar.g.+ Cholestrl_.mg. , data =model_data)
+#summary(energy.rlm)
+
+energy.rlm.df = augment(energy.rlm)
+energy.rlm.df$.fitted = energy.rlm.df$.fitted - mean(energy.rlm.df$.fitted)
+energy.rlm.long = energy.rlm.df %>% gather(component, value, c(.fitted, .resid))
+ggplot(energy.rlm.long, aes(sample = value)) + stat_qq() + facet_grid(~component)+ ggtitle("Residual-Fit Plot")
+
+ggplot(energy.rlm.df, aes(x = .fitted, y = .resid)) + geom_point() +geom_smooth(method = "rlm") +ggtitle("Residuals vs Fitted Plot")
+```
+
+The plots of the robust linear model don't differ much from the linear model above and hence aren't included in our model.
+
+
+## Outliers
+
+From the plots either in the linear model part or the Rubost part, several outliers exist and they may effect our model negatively. The outliers appear because for some particular food which contain high Calories but may contain low level of Protein, Fat, Carbohydrt, Sugar or Cholestrl or some low Calories foods may contain high level of Protein, Fat, Carbohydrt, Sugar or Cholestrl, these foods cause outliers because they are conflict with almost foods.
+
+## Transformations
+
+Since the data for the variables under consideration is skewed right, we choose to transform the variables using **sqrt** transformation.
+
+```{r ,echo = FALSE, message = FALSE, warning= FALSE}
+## Transformations:
+model.sqrt.lm=lm(sqrt(Calories.in.Kcal.) ~ Protein.g. + TotalFat_.g. + Carbohydrt_.g. + Cholestrl_.mg. + Sugar.g., data=Food)
+model.sqrt1.lm=lm(sqrt(Calories.in.Kcal.) ~ sqrt(Protein.g.) + sqrt(TotalFat_.g.) + sqrt(Carbohydrt_.g.) + sqrt(Cholestrl_.mg.) + sqrt(Sugar.g.), data=Food)
+#summary(model.sqrt1.lm)
+## Residual-fit Plot for the first model
+model.sqrt.lm.df=augment(model.sqrt.lm)
+model.sqrt.lm.df$.fitted=model.sqrt.lm.df$.fitted-mean(model.sqrt.lm.df$.fitted)
+model.sqrt.lm.long=model.sqrt.lm.df %>% gather(component, value, c(.fitted, .resid))
+#ggplot(model.sqrt.lm.long, aes(sample=value))+stat_qq()+facet_grid(~component)
+## Residual-fit Plot for the second model
+model.sqrt1.lm.df=augment(model.sqrt1.lm)
+model.sqrt1.lm.df$.fitted=model.sqrt1.lm.df$.fitted-mean(model.sqrt1.lm.df$.fitted)
+model.sqrt1.lm.long=model.sqrt1.lm.df %>% gather(component, value, c(.fitted, .resid)) 
+ggplot(model.sqrt1.lm.long, aes(sample=value))+stat_qq()+facet_grid(~component) + ggtitle("Residual-Fit Plot for transformed data")
+```
+
+
+
+# Classification Problem
+
+**Question** : Given a food item with nutrient content, can we predict the food categories to which it belong.
+
+For classification problem, we have tries two different techniques:
+1. LDA
+2. Classification trees
+
+
+```{r ,echo = FALSE, message = FALSE, warning= FALSE}
+## preparing dataset for tree model 
+my_data = subset(USDA, USDA$Food_group== "Baked Products" | USDA$Food_group== "Beef Products"| 
+                   USDA$Food_group== "Vegetables and Vegetable Products" |USDA$Food_group== "Soups, Sauces, and Gravies"|  USDA$Food_group== "Sweets" )
+
+## refactor the food groups
+my_data$Food_group = factor(my_data$Food_group,levels = c("Baked Products","Beef Products","Vegetables and Vegetable Products","Soups, Sauces, and Gravies","Sweets"))
+
+## training and testing data
+set.seed(200)
+inTrain <- sample(1:nrow(my_data), 2610)
+train_set <- my_data[inTrain,]
+test_set <- my_data[-inTrain,]
+no_of_test_set = nrow(test_set)
+no_of_train_set = nrow(train_set)
+
+## remove first 2 columns
+train_set <- train_set[ -c(1,2)]
+test_set <- test_set[-c(1,2)]
+```
+
+We extracted dataset of only five categories (Baked, Beef Products, Vegetables, Sopus and sweets) out of 25 categories and then divided our dataset into training set and testing set.
+
+Our training set consists of 2610 examples and testing set contains 1000 examples. Since our main goal is classification, we tried to predict the category using LDA. As we know that the purpose of LDA is to find linear combinations of variables that gives the best possible spearation between the groups in our data.
+
+```{r ,echo = FALSE, message = FALSE, warning= FALSE}
+## lda
+lda_out <- lda(formula = Food_group ~ ., data = train_set)
+#lda_out
+plda = predict(lda_out,newdata=test_set)
+t1=table(plda$class, test_set$Food_group)
+error_lda = (no_of_test_set-sum(diag(t1)))/no_of_test_set
+
+food.ldaplot = data.frame(cbind(plda$x,factor(test_set$Food_group)))
+ggplot(food.ldaplot,aes(x=LD1,y=LD2,col=test_set$Food_group))+geom_point()
+ggplot(food.ldaplot,aes(x=LD3,y=LD4,col=test_set$Food_group))+geom_point()
+
+```
+
+As we can see that it is difficult to separate the groups using LDA as it is difficult to find linear separable boundaries in graph. Therefore we have tried classification trees to see if we can get good accuracy using that.
+
+
+ 
+```{r,echo = FALSE, message = FALSE, warning= FALSE}
+
+## fitting tree 
+fit <- rpart(Food_group ~ ., data=train_set)
+#printcp(fit) # display the results 
+plotcp(fit) # visualize cross-validation results 
+#summary(fit) # detailed summary of splits
+
+# plot tree 
+fancyRpartPlot(fit,cex =0.65,main ="Classification tree")
+#text(fit,use.n=TRUE, all=TRUE, cex=.7)
+
+## prediction on train set 
+predictions <- predict(fit, newdata=train_set, type="class")
+cf_tree = table(predictions, train_set$Food_group)
+error_tree_nutrient_train = (no_of_train_set-sum(diag(cf_tree)))/no_of_train_set
+
+## prediction on test set
+predictions <- predict(fit, newdata=test_set, type="class")
+cf_tree = table(predictions, test_set$Food_group)
+error_tree_nutrient_test = (no_of_test_set-sum(diag(cf_tree)))/no_of_test_set
+```
+Using classification trees we get approximately 89% accuracy on training set and 85% accuracy on tetsing set.Also, we see that carbohydrates are the main nutrient to classify the food item into different categories.
+
+
+# Future Work
+
+We can explore some more interesting problems with the dataset.
+
+1. Most of the food items we find in market has nutrient fact and ingredient list associated with it.Just with the nutrient data and ingredient list, can we find out the percentage of individual ingredient in the food item. We can also comment about the correctness of nutrient content.
+
+2.  Normally the food article only specify the general category of ingredient. For example, bread found in market does not specify the type of wheat they are using. We can comment about the type of wheat they ae using. This can help people with allergies about specific food particle.
+
+3.  By knowing the specific type of product, we can also comment whether a particular industry is importing a given food ingredient or not. If we have data on current trends of the cost of the food particular we are using then we may be able to predict the stocks prices of that particular industry.
+
